@@ -1,0 +1,2 @@
+# Ignore the 'packages.lock.json' file - it will be updated by the tests but we don't want to commit those changes.
+packages.lock.json

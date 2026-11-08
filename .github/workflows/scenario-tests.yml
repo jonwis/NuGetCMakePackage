@@ -1,0 +1,48 @@
+name: Scenario Tests
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  scenario-basic:
+    name: Basic Scenario (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - windows-latest
+          - ubuntu-latest
+          - macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          lfs: false
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Verify CMake
+        shell: pwsh
+        run: |
+          Get-Command cmake
+          cmake --version
+
+      - name: Install Pester
+        shell: pwsh
+        run: |
+          Install-Module -Name Pester -MinimumVersion 5.0 -Force -SkipPublisherCheck -Scope CurrentUser
+
+      - name: Run scenario tests
+        shell: pwsh
+        env:
+          NUGET_TOOLS_PATH: ${{ github.workspace }}/__tools
+        run: |
+          $result = Invoke-Pester -Path scenarios -Output Detailed -PassThru
+          exit $result.FailedCount

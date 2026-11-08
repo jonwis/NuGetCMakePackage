@@ -67,8 +67,18 @@ block(SCOPE_FOR VARIABLES)
 
     # For 'overlay' configuration, rely on the 'NUGET_LOCATION-<package name>' global property set by the NuGetCMakePackage.
     # For 'laid out' configuration, this should rely on the location of the current file.
-    get_property(PACKAGE_LOCATION GLOBAL PROPERTY NUGET_LOCATION-MICROSOFT_WINDOWSAPPSDK_FOUNDATION)
-    get_property(PACKAGE_VERSION  GLOBAL PROPERTY NUGET_VERSION-MICROSOFT_WINDOWSAPPSDK_FOUNDATION)
+    get_property(PACKAGE_VERSION DIRECTORY PROPERTY NUGET_VERSION-MICROSOFT_WINDOWSAPPSDK_FOUNDATION)
+    set(PACKAGE_SCOPE GLOBAL)
+    set(INTERFACE_SCOPE)
+    set(IMPORTED_SCOPE GLOBAL)
+    if(PACKAGE_VERSION)
+        set(PACKAGE_SCOPE DIRECTORY)
+        set(INTERFACE_SCOPE IMPORTED)
+        set(IMPORTED_SCOPE)
+    else()
+        get_property(PACKAGE_VERSION GLOBAL PROPERTY NUGET_VERSION-MICROSOFT_WINDOWSAPPSDK_FOUNDATION)
+    endif()
+    get_property(PACKAGE_LOCATION ${PACKAGE_SCOPE} PROPERTY NUGET_LOCATION-MICROSOFT_WINDOWSAPPSDK_FOUNDATION)
 
     #[[====================================================================================================================
         Target: Microsoft.WindowsAppSDK.Foundation
@@ -107,7 +117,7 @@ block(SCOPE_FOR VARIABLES)
     #[[====================================================================================================================
         Target: Microsoft.WindowsAppSDK.Foundation_Framework
     ====================================================================================================================]]#
-    add_library(Microsoft.WindowsAppSDK.Foundation_Framework INTERFACE)
+    add_library(Microsoft.WindowsAppSDK.Foundation_Framework INTERFACE ${INTERFACE_SCOPE})
 
     target_link_libraries(Microsoft.WindowsAppSDK.Foundation_Framework
         INTERFACE
@@ -130,7 +140,7 @@ block(SCOPE_FOR VARIABLES)
     if(NOT Microsoft.WindowsAppSDK.Runtime_FOUND)
         message(VERBOSE "Microsoft.WindowsAppSDK.Runtime *not* found. The 'bootstrap' logic will *not* be available, and the Framework will need to be bootstrapped manually.")
     else()
-        add_library(Microsoft.WindowsAppSDK.Foundation_Bootstrap SHARED IMPORTED GLOBAL)
+        add_library(Microsoft.WindowsAppSDK.Foundation_Bootstrap SHARED IMPORTED ${IMPORTED_SCOPE})
 
         target_sources(Microsoft.WindowsAppSDK.Foundation_Bootstrap
             INTERFACE
@@ -151,7 +161,7 @@ block(SCOPE_FOR VARIABLES)
         # The 'Microsoft.WindowsAppSDK.Foundation_DynamicDependencyBootstrap' target adds the
         # 'MddBootstrapAutoInitializer.cpp' source, and the MICROSOFT_WINDOWSAPPSDK_AUTOINITIALIZE_BOOTSTRAP
         # preprocessor definition.
-        add_library(Microsoft.WindowsAppSDK.Foundation_DynamicDependencyBootstrap INTERFACE)
+        add_library(Microsoft.WindowsAppSDK.Foundation_DynamicDependencyBootstrap INTERFACE ${INTERFACE_SCOPE})
 
         target_sources(Microsoft.WindowsAppSDK.Foundation_DynamicDependencyBootstrap
             INTERFACE
@@ -171,7 +181,7 @@ block(SCOPE_FOR VARIABLES)
         # The 'Microsoft.WindowsAppSDK.Foundation_DeploymentManagerBootstrap' target adds the
         # 'DeploymentManagerAutoInitializer.cpp' source, and the MICROSOFT_WINDOWSAPPSDK_AUTOINITIALIZE_DEPLOYMENTMANAGER
         # preprocessor definition.
-        add_library(Microsoft.WindowsAppSDK.Foundation_DeploymentManagerBootstrap INTERFACE)
+        add_library(Microsoft.WindowsAppSDK.Foundation_DeploymentManagerBootstrap INTERFACE ${INTERFACE_SCOPE})
 
         target_sources(Microsoft.WindowsAppSDK.Foundation_DeploymentManagerBootstrap
             INTERFACE
@@ -200,7 +210,7 @@ block(SCOPE_FOR VARIABLES)
     #[[====================================================================================================================
         Target: Microsoft.WindowsAppSDK.Foundation_SelfContained
     ====================================================================================================================]]#
-    add_library(Microsoft.WindowsAppSDK.Foundation_SelfContainedRuntime SHARED IMPORTED GLOBAL)
+    add_library(Microsoft.WindowsAppSDK.Foundation_SelfContainedRuntime SHARED IMPORTED ${IMPORTED_SCOPE})
 
     set(FRAMEWORK_PATH "${PACKAGE_LOCATION}/runtimes-framework/win-${PLATFORM_IDENTIFIER}/native")
     set(FRAMEWORK_DLLS
@@ -214,7 +224,7 @@ block(SCOPE_FOR VARIABLES)
             IMPORTED_LOCATION "${FRAMEWORK_DLLS}"
     )
 
-    add_library(Microsoft.WindowsAppSDK.Foundation_SelfContained INTERFACE)
+    add_library(Microsoft.WindowsAppSDK.Foundation_SelfContained INTERFACE ${INTERFACE_SCOPE})
 
     target_sources(Microsoft.WindowsAppSDK.Foundation_SelfContained
         INTERFACE

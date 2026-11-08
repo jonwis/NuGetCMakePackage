@@ -28,10 +28,24 @@ endif()
 block(SCOPE_FOR VARIABLES)
     # For 'overlay' configuration, rely on the 'NUGET_LOCATION-<package name>' global property set by the NuGetCMakePackage.
     # For 'laid out' configuration, this should rely on the location of the current file.
-    get_property(PACKAGE_LOCATION GLOBAL PROPERTY NUGET_LOCATION-MICROSOFT_WINDOWS_IMPLEMENTATIONLIBRARY)
-    get_property(PACKAGE_VERSION  GLOBAL PROPERTY NUGET_VERSION-MICROSOFT_WINDOWS_IMPLEMENTATIONLIBRARY)
+    get_property(PACKAGE_VERSION DIRECTORY PROPERTY NUGET_VERSION-MICROSOFT_WINDOWS_IMPLEMENTATIONLIBRARY)
+    set(PACKAGE_SCOPE GLOBAL)
+    set(INTERFACE_SCOPE)
+    if(PACKAGE_VERSION)
+        set(PACKAGE_SCOPE DIRECTORY)
+        set(INTERFACE_SCOPE IMPORTED)
+    else()
+        get_property(PACKAGE_VERSION GLOBAL PROPERTY NUGET_VERSION-MICROSOFT_WINDOWS_IMPLEMENTATIONLIBRARY)
+    endif()
+    get_property(PACKAGE_LOCATION ${PACKAGE_SCOPE} PROPERTY NUGET_LOCATION-MICROSOFT_WINDOWS_IMPLEMENTATIONLIBRARY)
 
-    add_library(Microsoft.Windows.ImplementationLibrary INTERFACE)
+    add_library(Microsoft.Windows.ImplementationLibrary INTERFACE ${INTERFACE_SCOPE})
+    if(PACKAGE_SCOPE STREQUAL "DIRECTORY")
+        set_target_properties(Microsoft.Windows.ImplementationLibrary PROPERTIES
+            NUGET_LOCATION "${PACKAGE_LOCATION}"
+            NUGET_VERSION "${PACKAGE_VERSION}"
+        )
+    endif()
 
     target_include_directories(Microsoft.Windows.ImplementationLibrary
         INTERFACE

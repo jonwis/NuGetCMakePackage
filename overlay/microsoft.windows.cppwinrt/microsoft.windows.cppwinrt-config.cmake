@@ -43,8 +43,6 @@ endif()
             * local               Local %WinDir%\System32\WinMetadata folder
             * sdk[+]              Current version of Windows SDK [with extensions]
             * 10.0.12345.0[+]     Specific version of Windows SDK [with extensions]
-        * or,
-            * nuget:10.0.19041.2  Specific version of the 'Microsoft.Windows.SDK.Contracts'
 
     If the INPUTS includes a path to a .winmd file, the file will be a dependency of the target that generates the
     projection.
@@ -58,6 +56,8 @@ endif()
     to `${CMAKE_BINARY_DIR}/__cppwinrt`. Note: It is recommended that a custom value is specified outside of
     ${CMAKE_BINARY_DIR}, so that the same generated projection files can be used for all platforms and configurations.
 
+    Opt-in mode defaults to `${CMAKE_CURRENT_BINARY_DIR}/__cppwinrt` and adds a consumer/target suffix.
+
 ====================================================================================================================]]#
 function(add_cppwinrt_projection TARGET_NAME)
     set(OPTIONS OPTIMIZE)
@@ -68,20 +68,25 @@ function(add_cppwinrt_projection TARGET_NAME)
         message(FATAL_ERROR "add_cppwinrt_projection called with incorrect arguments: a target name is required.")
     endif()
 
+    get_property(SCOPED_VERSION DIRECTORY PROPERTY NUGET_VERSION-MICROSOFT_WINDOWS_CPPWINRT)
+    set(DIRECTORY_SCOPED FALSE)
+    if(SCOPED_VERSION)
+        set(DIRECTORY_SCOPED TRUE)
+    elseif(TARGET Microsoft.Windows.CppWinRT)
+        get_target_property(DIRECTORY_SCOPED Microsoft.Windows.CppWinRT NUGET_DIRECTORY_SCOPED)
+    endif()
+    if(DIRECTORY_SCOPED AND TARGET "${TARGET_NAME}")
+        message(FATAL_ERROR "add_cppwinrt_projection: Target '${TARGET_NAME}' is already visible in this consumer. Use a distinct projection target name.")
+    endif()
+
     cmake_parse_arguments(PARSE_ARGV 1 CPPWINRT "${OPTIONS}" "${ONE_VALUE_KEYWORDS}" "${MULTI_VALUE_KEYWORDS}")
 
     if(NOT CPPWINRT_PROJECTION_ROOT_PATH)
-        set(CPPWINRT_PROJECTION_ROOT_PATH ${CMAKE_BINARY_DIR}/__cppwinrt)
-    endif()
-
-    if(CPPWINRT_INPUTS MATCHES [[^nuget\:(.*)]])
-        message(VERBOSE "add_cppwinrt_projection: NuGet version '${CMAKE_MATCH_1}' specified.")
-
-        install_nuget_package(Microsoft.Windows.SDK.Contracts "${CMAKE_MATCH_1}" NUGET_MICROSOFT_WINDOWS_SDK_CONTRACTS
-            PACKAGESAVEMODE nuspec
-            DEPENDENCYVERSION Ignore
-        )
-        set(CPPWINRT_INPUTS "${NUGET_MICROSOFT_WINDOWS_SDK_CONTRACTS}/ref/netstandard2.0")
+        if(DIRECTORY_SCOPED)
+            set(CPPWINRT_PROJECTION_ROOT_PATH ${CMAKE_CURRENT_BINARY_DIR}/__cppwinrt)
+        else()
+            set(CPPWINRT_PROJECTION_ROOT_PATH ${CMAKE_BINARY_DIR}/__cppwinrt)
+        endif()
     endif()
 
     set(CPPWINRT_REFS)
@@ -100,10 +105,27 @@ function(add_cppwinrt_projection TARGET_NAME)
 
     # For 'overlay' configuration, rely on the 'NUGET_LOCATION-<package name>' global property set by the NuGetCMakePackage.
     # For 'laid out' configuration, this should rely on the location of the current file.
-    get_property(PACKAGE_LOCATION GLOBAL PROPERTY NUGET_LOCATION-MICROSOFT_WINDOWS_CPPWINRT)
+    if(DIRECTORY_SCOPED)
+        if(TARGET Microsoft.Windows.CppWinRT)
+            get_target_property(PACKAGE_LOCATION Microsoft.Windows.CppWinRT NUGET_LOCATION)
+            get_target_property(PACKAGE_VERSION Microsoft.Windows.CppWinRT NUGET_VERSION)
+        else()
+            get_property(PACKAGE_LOCATION DIRECTORY PROPERTY NUGET_LOCATION-MICROSOFT_WINDOWS_CPPWINRT)
+            get_property(PACKAGE_VERSION DIRECTORY PROPERTY NUGET_VERSION-MICROSOFT_WINDOWS_CPPWINRT)
+        endif()
+    else()
+        get_property(PACKAGE_LOCATION GLOBAL PROPERTY NUGET_LOCATION-MICROSOFT_WINDOWS_CPPWINRT)
+    endif()
 
     # Build the command to generate the projection
     set(CPPWINRT_OUTPUT ${CPPWINRT_PROJECTION_ROOT_PATH}/${TARGET_NAME})
+    if(DIRECTORY_SCOPED)
+        string(SHA256 PROJECTION_ID "${CMAKE_CURRENT_BINARY_DIR}|${TARGET_NAME}")
+        string(SUBSTRING "${PROJECTION_ID}" 0 16 PROJECTION_ID)
+        set(PROJECTION_TARGET "_nuget_cppwinrt_${PROJECTION_ID}")
+        string(APPEND CPPWINRT_OUTPUT "/${PROJECTION_ID}")
+        file(MAKE_DIRECTORY "${CPPWINRT_OUTPUT}")
+    endif()
     set(CPPWINRT_OUTPUT_FILE ${CPPWINRT_OUTPUT}/output.log)
     set(CPPWINRT_EXECUTABLE_PATH ${PACKAGE_LOCATION}/bin/cppwinrt.exe)
 
@@ -154,9 +176,25 @@ function(add_cppwinrt_projection TARGET_NAME)
         WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
     )
 
-    add_library(${TARGET_NAME} INTERFACE
-        ${CPPWINRT_OUTPUT_FILE}
-    )
+    if(DIRECTORY_SCOPED)
+        add_custom_target(${PROJECTION_TARGET} DEPENDS "${CPPWINRT_OUTPUT_FILE}")
+        add_library(${TARGET_NAME} INTERFACE IMPORTED)
+        add_dependencies(${TARGET_NAME} ${PROJECTION_TARGET})
+        set_target_properties(${TARGET_NAME} PROPERTIES
+            CPPWINRT_EXECUTABLE_PATH "${CPPWINRT_EXECUTABLE_PATH}"
+        )
+        if(TARGET_NAME STREQUAL "Microsoft.Windows.CppWinRT")
+            set_target_properties(${TARGET_NAME} PROPERTIES
+                NUGET_LOCATION "${PACKAGE_LOCATION}"
+                NUGET_VERSION "${PACKAGE_VERSION}"
+                NUGET_DIRECTORY_SCOPED TRUE
+            )
+        endif()
+    else()
+        add_library(${TARGET_NAME} INTERFACE
+            ${CPPWINRT_OUTPUT_FILE}
+        )
+    endif()
 
     target_include_directories(${TARGET_NAME} BEFORE
         INTERFACE

@@ -1,0 +1,6 @@
+{
+  "targetFramework": "@ADD_NUGET_FRAMEWORK@",
+  "packages": [
+    @PACKAGE_ENTRIES@
+  ]
+}

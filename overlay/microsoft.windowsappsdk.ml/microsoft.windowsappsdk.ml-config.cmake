@@ -60,8 +60,18 @@ block(SCOPE_FOR VARIABLES)
 
     # For 'overlay' configuration, rely on the 'NUGET_LOCATION-<package name>' global property set by the NuGetCMakePackage.
     # For 'laid out' configuration, this should rely on the location of the current file.
-    get_property(PACKAGE_LOCATION GLOBAL PROPERTY NUGET_LOCATION-MICROSOFT_WINDOWSAPPSDK_ML)
-    get_property(PACKAGE_VERSION  GLOBAL PROPERTY NUGET_VERSION-MICROSOFT_WINDOWSAPPSDK_ML)
+    get_property(PACKAGE_VERSION DIRECTORY PROPERTY NUGET_VERSION-MICROSOFT_WINDOWSAPPSDK_ML)
+    set(PACKAGE_SCOPE GLOBAL)
+    set(INTERFACE_SCOPE)
+    set(IMPORTED_SCOPE GLOBAL)
+    if(PACKAGE_VERSION)
+        set(PACKAGE_SCOPE DIRECTORY)
+        set(INTERFACE_SCOPE IMPORTED)
+        set(IMPORTED_SCOPE)
+    else()
+        get_property(PACKAGE_VERSION GLOBAL PROPERTY NUGET_VERSION-MICROSOFT_WINDOWSAPPSDK_ML)
+    endif()
+    get_property(PACKAGE_LOCATION ${PACKAGE_SCOPE} PROPERTY NUGET_LOCATION-MICROSOFT_WINDOWSAPPSDK_ML)
 
     #[[====================================================================================================================
         Target: Microsoft.WindowsAppSDK.ML
@@ -85,7 +95,7 @@ block(SCOPE_FOR VARIABLES)
         Target: Microsoft.WindowsAppSDK.ML_Framework
         The target for the framework dependencies of the Windows AI Machine Learning library.
     ====================================================================================================================]]#
-    add_library(Microsoft.WindowsAppSDK.ML_Framework INTERFACE)
+    add_library(Microsoft.WindowsAppSDK.ML_Framework INTERFACE ${INTERFACE_SCOPE})
 
     target_compile_definitions(Microsoft.WindowsAppSDK.ML_Framework
         INTERFACE
@@ -113,7 +123,7 @@ block(SCOPE_FOR VARIABLES)
     #[[====================================================================================================================
     ====================================================================================================================]]#
 
-    add_library(Microsoft.WindowsAppSDK.ML_SelfContainedRuntime SHARED IMPORTED GLOBAL)
+    add_library(Microsoft.WindowsAppSDK.ML_SelfContainedRuntime SHARED IMPORTED ${IMPORTED_SCOPE})
 
     set(FRAMEWORK_PATH "${PACKAGE_LOCATION}/runtimes-framework/win-${PLATFORM_IDENTIFIER}/native")
     set(FRAMEWORK_DLLS
@@ -142,7 +152,7 @@ block(SCOPE_FOR VARIABLES)
 
         The target for the 'self-contained' dependencies of the Windows AI Machine Learning library.
     ====================================================================================================================]]#
-    add_library(Microsoft.WindowsAppSDK.ML_SelfContained INTERFACE)
+    add_library(Microsoft.WindowsAppSDK.ML_SelfContained INTERFACE ${INTERFACE_SCOPE})
 
     target_sources(Microsoft.WindowsAppSDK.ML_SelfContained
         INTERFACE

@@ -52,8 +52,18 @@ block(SCOPE_FOR VARIABLES)
 
     # For 'overlay' configuration, rely on the 'NUGET_LOCATION-<package name>' global property set by the NuGetCMakePackage.
     # For 'laid out' configuration, this should rely on the location of the current file.
-    get_property(PACKAGE_LOCATION GLOBAL PROPERTY NUGET_LOCATION-MICROSOFT_WINDOWSAPPSDK_INTERACTIVEEXPERIENCES)
-    get_property(PACKAGE_VERSION  GLOBAL PROPERTY NUGET_VERSION-MICROSOFT_WINDOWSAPPSDK_INTERACTIVEEXPERIENCES)
+    get_property(PACKAGE_VERSION DIRECTORY PROPERTY NUGET_VERSION-MICROSOFT_WINDOWSAPPSDK_INTERACTIVEEXPERIENCES)
+    set(PACKAGE_SCOPE GLOBAL)
+    set(INTERFACE_SCOPE)
+    set(IMPORTED_SCOPE GLOBAL)
+    if(PACKAGE_VERSION)
+        set(PACKAGE_SCOPE DIRECTORY)
+        set(INTERFACE_SCOPE IMPORTED)
+        set(IMPORTED_SCOPE)
+    else()
+        get_property(PACKAGE_VERSION GLOBAL PROPERTY NUGET_VERSION-MICROSOFT_WINDOWSAPPSDK_INTERACTIVEEXPERIENCES)
+    endif()
+    get_property(PACKAGE_LOCATION ${PACKAGE_SCOPE} PROPERTY NUGET_LOCATION-MICROSOFT_WINDOWSAPPSDK_INTERACTIVEEXPERIENCES)
 
     #[[====================================================================================================================
         Target: Microsoft.WindowsAppSDK.InteractiveExperiences
@@ -76,7 +86,7 @@ block(SCOPE_FOR VARIABLES)
     #[[====================================================================================================================
         Target: Microsoft.WindowsAppSDK.InteractiveExperiences_SelfContained
     ====================================================================================================================]]#
-    add_library(Microsoft.WindowsAppSDK.InteractiveExperiences_SelfContainedRuntime SHARED IMPORTED GLOBAL)
+    add_library(Microsoft.WindowsAppSDK.InteractiveExperiences_SelfContainedRuntime SHARED IMPORTED ${IMPORTED_SCOPE})
 
     set(FRAMEWORK_PATH "${PACKAGE_LOCATION}/runtimes-framework/win-${PLATFORM_IDENTIFIER}/native")
     set(FRAMEWORK_DLLS
@@ -115,7 +125,7 @@ block(SCOPE_FOR VARIABLES)
             IMPORTED_LOCATION "${FRAMEWORK_DLLS}"
     )
 
-    add_library(Microsoft.WindowsAppSDK.InteractiveExperiences_SelfContained INTERFACE)
+    add_library(Microsoft.WindowsAppSDK.InteractiveExperiences_SelfContained INTERFACE ${INTERFACE_SCOPE})
 
     target_sources(Microsoft.WindowsAppSDK.InteractiveExperiences_SelfContained
         INTERFACE

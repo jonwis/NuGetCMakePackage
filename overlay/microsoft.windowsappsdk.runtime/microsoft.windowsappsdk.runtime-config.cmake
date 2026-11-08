@@ -27,10 +27,18 @@ endif()
 block(SCOPE_FOR VARIABLES)
     # For 'overlay' configuration, rely on the 'NUGET_LOCATION-<package name>' global property set by the NuGetCMakePackage.
     # For 'laid out' configuration, this should rely on the location of the current file.
-    get_property(PACKAGE_LOCATION GLOBAL PROPERTY NUGET_LOCATION-MICROSOFT_WINDOWSAPPSDK_RUNTIME)
-    get_property(PACKAGE_VERSION  GLOBAL PROPERTY NUGET_VERSION-MICROSOFT_WINDOWSAPPSDK_RUNTIME)
+    get_property(PACKAGE_VERSION DIRECTORY PROPERTY NUGET_VERSION-MICROSOFT_WINDOWSAPPSDK_RUNTIME)
+    set(PACKAGE_SCOPE GLOBAL)
+    set(INTERFACE_SCOPE)
+    if(PACKAGE_VERSION)
+        set(PACKAGE_SCOPE DIRECTORY)
+        set(INTERFACE_SCOPE IMPORTED)
+    else()
+        get_property(PACKAGE_VERSION GLOBAL PROPERTY NUGET_VERSION-MICROSOFT_WINDOWSAPPSDK_RUNTIME)
+    endif()
+    get_property(PACKAGE_LOCATION ${PACKAGE_SCOPE} PROPERTY NUGET_LOCATION-MICROSOFT_WINDOWSAPPSDK_RUNTIME)
 
-    add_library(Microsoft.WindowsAppSDK.Runtime INTERFACE)
+    add_library(Microsoft.WindowsAppSDK.Runtime INTERFACE ${INTERFACE_SCOPE})
 
     target_include_directories(Microsoft.WindowsAppSDK.Runtime
         INTERFACE
