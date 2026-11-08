@@ -56,6 +56,47 @@ target_link_libraries(SomeTarget
 
 See the full sequence diagram in [documentation/end-to-end-sequence.md](./documentation/end-to-end-sequence.md).
 
+### Optional independent consumers
+
+Use `add_target_nuget_packages` for independent package versions in sibling consumer directories.
+It accepts the same arguments as `add_nuget_packages`, without a target name.
+`add_nuget_packages` remains global. Each consumer restores its complete graph with its own lock file:
+
+```cmake
+add_subdirectory(ClientA)
+add_subdirectory(ClientB)
+```
+
+`ClientA/CMakeLists.txt`:
+
+```cmake
+add_target_nuget_packages(
+    PACKAGES Microsoft.Windows.ImplementationLibrary 1.0.240803.1
+    CONFIG_FILE "${CMAKE_CURRENT_SOURCE_DIR}/../nuget.config"
+    LOCK_FILE "${CMAKE_CURRENT_SOURCE_DIR}/packages.lock.json"
+)
+find_package(Microsoft.Windows.ImplementationLibrary CONFIG REQUIRED)
+target_link_libraries(ClientA PRIVATE Microsoft.Windows.ImplementationLibrary)
+```
+
+`ClientB` can request another version. Set `NUGET_PACKAGES` to share NuGet's cache, for example `Q:\nuget-cache`.
+
+Conflicting same-directory or ancestor versions fail. Do not register the same package through both APIs,
+even at equal versions.
+
+Opt-in overlays retain canonical names as local imported targets. Link projection interfaces; do not build their
+canonical names directly.
+
+Package configs must use local imported targets and directory-scoped guards, without global state.
+Do not use `find_package(... GLOBAL)` or `CMAKE_FIND_PACKAGE_TARGETS_GLOBAL`.
+CMake isolation does not ensure Windows App SDK runtime coexistence.
+
+#### Concurrent restores
+
+Concurrent restores rely on NuGet's cache locks. Use separate binary trees, share `NUGET_PACKAGES` and
+`NUGET_SCRATCH`, and set `NUNUGET_PATH` to an existing NuNuGet executable.
+Callers must serialize writes to any shared `LOCK_FILE`.
+
 ## Configuration
 
 The behavior of this package can be configured with the following CMake variables:

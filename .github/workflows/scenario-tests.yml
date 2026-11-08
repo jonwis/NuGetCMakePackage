@@ -44,5 +44,5 @@ jobs:
         env:
           NUGET_TOOLS_PATH: ${{ github.workspace }}/__tools
         run: |
-          $result = Invoke-Pester scenarios/basic/Basic.Tests.ps1 -Output Detailed -PassThru
+          $result = Invoke-Pester -Path scenarios -Output Detailed -PassThru
           exit $result.FailedCount

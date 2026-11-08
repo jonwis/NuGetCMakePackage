@@ -192,6 +192,15 @@ endfunction()
 
 ====================================================================================================================]]#
 function(add_nuget_packages)
+    _nuget_add_packages(add_nuget_packages FALSE)
+endfunction()
+
+function(add_target_nuget_packages)
+    _nuget_add_packages(add_target_nuget_packages TRUE)
+endfunction()
+
+# A macro preserves the public function's PARSE_ARGV and discovery PARENT_SCOPE.
+macro(_nuget_add_packages _NUGET_API _NUGET_SCOPED)
     block(SCOPE_FOR POLICIES)
         cmake_policy(SET CMP0174 NEW) # cmake_parse_arguments(PARSE_ARGV) defines a variable for an empty string after a single-value keyword.
 
@@ -209,11 +218,19 @@ function(add_nuget_packages)
         endif()
 
         if(NOT ADD_NUGET_CONFIG_FILE)
-            message(FATAL_ERROR "add_nuget_packages: 'CONFIG_FILE' is required.")
+            message(FATAL_ERROR "${_NUGET_API}: 'CONFIG_FILE' is required.")
         endif()
 
         if(NOT ADD_NUGET_LOCK_FILE)
-            message(FATAL_ERROR "add_nuget_packages: 'LOCK_FILE' is required.")
+            message(FATAL_ERROR "${_NUGET_API}: 'LOCK_FILE' is required.")
+        endif()
+
+        if(${_NUGET_SCOPED})
+            if(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL)
+                message(FATAL_ERROR "${_NUGET_API}: CMAKE_FIND_PACKAGE_TARGETS_GLOBAL must be disabled to keep consumer package targets directory-local.")
+            endif()
+            cmake_path(ABSOLUTE_PATH ADD_NUGET_CONFIG_FILE BASE_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" NORMALIZE)
+            cmake_path(ABSOLUTE_PATH ADD_NUGET_LOCK_FILE BASE_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" NORMALIZE)
         endif()
 
         # Get policy CMP0074:
@@ -234,29 +251,44 @@ function(add_nuget_packages)
             list(POP_FRONT ADD_NUGET_PACKAGES PACKAGE_VERSION)
 
             if((PACKAGE_NAME STREQUAL "") OR (PACKAGE_VERSION STREQUAL ""))
-                message(FATAL_ERROR "add_nuget_packages: 'PACKAGES' must be passed valid NuGet name/version pairs.")
+                message(FATAL_ERROR "${_NUGET_API}: 'PACKAGES' must be passed valid NuGet name/version pairs.")
             endif()
 
             list(APPEND PACKAGE_ENTRIES "{ \"id\": \"${PACKAGE_NAME}\", \"version\": \"${PACKAGE_VERSION}\" }")
         endwhile()
 
         # Configure the JSON file to pass to NuNuGet with the list of packages to resolve.
+        set(PACKAGE_LIST_FILE "${CMAKE_BINARY_DIR}/${CMAKE_PROJECT_NAME}.packages.list.json")
+        set(RESTORE_WORKING_DIRECTORY)
+        if(${_NUGET_SCOPED})
+            get_property(RESTORE_INDEX DIRECTORY PROPERTY NUGET_RESTORE_INDEX)
+            if(NOT RESTORE_INDEX)
+                set(RESTORE_INDEX 0)
+            endif()
+            math(EXPR RESTORE_INDEX "${RESTORE_INDEX} + 1")
+            set_property(DIRECTORY PROPERTY NUGET_RESTORE_INDEX "${RESTORE_INDEX}")
+            set(RESTORE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/__nuget/${RESTORE_INDEX}")
+            file(MAKE_DIRECTORY "${RESTORE_DIRECTORY}")
+            set(PACKAGE_LIST_FILE "${RESTORE_DIRECTORY}/packages.list.json")
+            set(RESTORE_WORKING_DIRECTORY WORKING_DIRECTORY "${RESTORE_DIRECTORY}")
+        endif()
         list(JOIN PACKAGE_ENTRIES ",\n    " PACKAGE_ENTRIES)
         configure_file(
             "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/packages.list.json.in"
-            "${CMAKE_BINARY_DIR}/${CMAKE_PROJECT_NAME}.packages.list.json"
+            "${PACKAGE_LIST_FILE}"
             @ONLY
         )
 
         # Make sure that 'nunuget' is available, then invoke it to install the packages to the global packages path.
         ensure_nunuget()
-        message(VERBOSE "Invoking NuNuGet with the following arguments: --configFile ${ADD_NUGET_CONFIG_FILE} --listFile ${CMAKE_BINARY_DIR}/${CMAKE_PROJECT_NAME}.packages.list.json --lockFile ${ADD_NUGET_LOCK_FILE}")
+        message(VERBOSE "Invoking NuNuGet with the following arguments: --configFile ${ADD_NUGET_CONFIG_FILE} --listFile ${PACKAGE_LIST_FILE} --lockFile ${ADD_NUGET_LOCK_FILE}")
         execute_process(
             COMMAND "${NUNUGET_PATH}" install
                 --configFile "${ADD_NUGET_CONFIG_FILE}"
-                --listFile "${CMAKE_BINARY_DIR}/${CMAKE_PROJECT_NAME}.packages.list.json"
+                --listFile "${PACKAGE_LIST_FILE}"
                 --lockFile "${ADD_NUGET_LOCK_FILE}"
                 --verbose
+            ${RESTORE_WORKING_DIRECTORY}
             RESULT_VARIABLE NUNUGET_RESULT
             OUTPUT_VARIABLE NUNUGET_OUTPUT
             ERROR_VARIABLE NUNUGET_ERROR
@@ -264,9 +296,9 @@ function(add_nuget_packages)
 
         if(NUNUGET_RESULT)
             if(NUNUGET_RESULT EQUAL 100)
-                message(FATAL_ERROR "add_nuget_packages: The specified NuGet packages differ from the lock file: ${ADD_NUGET_LOCK_FILE}.\nPlease delete the lock file and re-run configuration to regenerate the lock file with the updated packages.")
+                message(FATAL_ERROR "${_NUGET_API}: The specified NuGet packages differ from the lock file: ${ADD_NUGET_LOCK_FILE}.\nPlease delete the lock file and re-run configuration to regenerate the lock file with the updated packages.")
             endif()
-            message(FATAL_ERROR "add_nuget_packages: NuNuGet failed with exit code ${NUNUGET_RESULT}. Output: ${NUNUGET_OUTPUT}\nError: ${NUNUGET_ERROR}")
+            message(FATAL_ERROR "${_NUGET_API}: NuNuGet failed with exit code ${NUNUGET_RESULT}. Output: ${NUNUGET_OUTPUT}\nError: ${NUNUGET_ERROR}")
         endif()
 
         # Convert the output from NuNuGet into a list of lines to parse the resolved packages and their paths.
@@ -281,7 +313,7 @@ function(add_nuget_packages)
         endwhile()
 
         if(NOT GLOBAL_PACKAGES_PATH)
-            message(FATAL_ERROR "add_nuget_packages: Unable to identify the global packages path.")
+            message(FATAL_ERROR "${_NUGET_API}: Unable to identify the global packages path.")
         endif()
         message(VERBOSE "Global packages path: ${GLOBAL_PACKAGES_PATH}")
 
@@ -309,22 +341,55 @@ function(add_nuget_packages)
             string(REPLACE "." "_" PACKAGE_NAME_PROPERTY ${PACKAGE_NAME_UPPER})
             string(REPLACE "-" "_" PACKAGE_NAME_PROPERTY ${PACKAGE_NAME_PROPERTY})
 
-            get_property(EXISTING_VERSION GLOBAL PROPERTY "NUGET_VERSION-${PACKAGE_NAME_PROPERTY}")
-            if(EXISTING_VERSION)
-                # The NuGet has already been added. If the version matches, just continue.
-                if(EXISTING_VERSION STREQUAL PACKAGE_VERSION)
-                    message(VERBOSE "add_nuget_packages: The package '${PACKAGE_NAME}' version '${PACKAGE_VERSION}' has already been added.")
-                    set("${PACKAGE_NAME}_FOUND" TRUE PARENT_SCOPE)
-                    continue()
+            get_property(GLOBAL_VERSION GLOBAL PROPERTY "NUGET_VERSION-${PACKAGE_NAME_PROPERTY}")
+            get_property(SCOPED_PACKAGES GLOBAL PROPERTY NUGET_SCOPED_PACKAGES)
+            if(${_NUGET_SCOPED})
+                if(GLOBAL_VERSION)
+                    message(FATAL_ERROR "${_NUGET_API}: The package '${PACKAGE_NAME}' is registered globally. Do not mix global and target-scoped APIs for the same package.")
                 endif()
-                message(FATAL_ERROR "add_nuget_packages: The package '${PACKAGE_NAME}' has already been added with version ${EXISTING_VERSION} - unable to add version ${PACKAGE_VERSION}.")
+                get_property(EXISTING_VERSION DIRECTORY PROPERTY "NUGET_VERSION-${PACKAGE_NAME_PROPERTY}")
+                if(EXISTING_VERSION AND NOT EXISTING_VERSION STREQUAL PACKAGE_VERSION)
+                    message(FATAL_ERROR "${_NUGET_API}: The package '${PACKAGE_NAME}' has already been added in this consumer with version ${EXISTING_VERSION} - unable to add version ${PACKAGE_VERSION}.")
+                endif()
+
+                get_property(ANCESTOR_DIRECTORY DIRECTORY PROPERTY PARENT_DIRECTORY)
+                while(ANCESTOR_DIRECTORY)
+                    get_property(ANCESTOR_VERSION DIRECTORY "${ANCESTOR_DIRECTORY}" PROPERTY "NUGET_VERSION-${PACKAGE_NAME_PROPERTY}")
+                    if(ANCESTOR_VERSION AND NOT ANCESTOR_VERSION STREQUAL PACKAGE_VERSION)
+                        message(FATAL_ERROR "${_NUGET_API}: The package '${PACKAGE_NAME}' version ${PACKAGE_VERSION} conflicts with ancestor consumer '${ANCESTOR_DIRECTORY}' version ${ANCESTOR_VERSION}. Put independent consumers in sibling directories.")
+                    endif()
+                    get_property(ANCESTOR_DIRECTORY DIRECTORY "${ANCESTOR_DIRECTORY}" PROPERTY PARENT_DIRECTORY)
+                endwhile()
+                if(NOT PACKAGE_NAME_PROPERTY IN_LIST SCOPED_PACKAGES)
+                    set_property(GLOBAL APPEND PROPERTY NUGET_SCOPED_PACKAGES "${PACKAGE_NAME_PROPERTY}")
+                endif()
+                set(PACKAGE_SCOPE DIRECTORY)
+            else()
+                if(PACKAGE_NAME_PROPERTY IN_LIST SCOPED_PACKAGES)
+                    message(FATAL_ERROR "${_NUGET_API}: The package '${PACKAGE_NAME}' is registered in target scope. Do not mix global and target-scoped APIs for the same package.")
+                endif()
+                if(GLOBAL_VERSION)
+                    # The NuGet has already been added. If the version matches, just continue.
+                    if(GLOBAL_VERSION STREQUAL PACKAGE_VERSION)
+                        message(VERBOSE "add_nuget_packages: The package '${PACKAGE_NAME}' version '${PACKAGE_VERSION}' has already been added.")
+                        set("${PACKAGE_NAME}_FOUND" TRUE PARENT_SCOPE)
+                        continue()
+                    endif()
+                    message(FATAL_ERROR "add_nuget_packages: The package '${PACKAGE_NAME}' has already been added with version ${GLOBAL_VERSION} - unable to add version ${PACKAGE_VERSION}.")
+                endif()
+                set(PACKAGE_SCOPE GLOBAL)
             endif()
 
             message(VERBOSE "Setting 'NUGET_VERSION-${PACKAGE_NAME_PROPERTY}' to ${PACKAGE_VERSION}")
-            set_property(GLOBAL PROPERTY "NUGET_VERSION-${PACKAGE_NAME_PROPERTY}" ${PACKAGE_VERSION})
-
+            set_property(${PACKAGE_SCOPE} PROPERTY "NUGET_VERSION-${PACKAGE_NAME_PROPERTY}" ${PACKAGE_VERSION})
             message(VERBOSE "Setting 'NUGET_LOCATION-${PACKAGE_NAME_PROPERTY}' to ${NUGET_LOCATION}")
-            set_property(GLOBAL PROPERTY "NUGET_LOCATION-${PACKAGE_NAME_PROPERTY}" ${NUGET_LOCATION})
+            set_property(${PACKAGE_SCOPE} PROPERTY "NUGET_LOCATION-${PACKAGE_NAME_PROPERTY}" ${NUGET_LOCATION})
+
+            if(${_NUGET_SCOPED})
+                set(${PACKAGE_NAME}_DIR "${PACKAGE_NAME}_DIR-NOTFOUND" PARENT_SCOPE)
+                set(${PACKAGE_NAME}_ROOT "${NUGET_LOCATION}" PARENT_SCOPE)
+                set(${PACKAGE_NAME_UPPER}_ROOT "${NUGET_LOCATION}" PARENT_SCOPE)
+            endif()
 
             # Look for package details in the NuGet - if they exist, set the relevant property to reference it
             # so that find_package can find it.
@@ -344,6 +409,9 @@ function(add_nuget_packages)
                 set(PROBE_FOLDER "${PROBE_PATH}/..")
                 cmake_path(NORMAL_PATH PROBE_FOLDER)
 
+                if(${_NUGET_SCOPED})
+                    set(${PACKAGE_NAME}_DIR "${PROBE_FOLDER}" PARENT_SCOPE)
+                endif()
                 if(POLICY_CMP0074 STREQUAL "NEW")
                     if(POLICY_CMP0144 STREQUAL "NEW")
                         set(${PACKAGE_NAME_UPPER}_ROOT ${PROBE_FOLDER} PARENT_SCOPE)
@@ -365,4 +433,4 @@ function(add_nuget_packages)
         list(POP_BACK CMAKE_MESSAGE_INDENT)
         message(CHECK_PASS "done")
     endblock()
-endfunction()
+endmacro()

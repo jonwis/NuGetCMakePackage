@@ -10,13 +10,15 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(NuGetCMakePackage)
 
+set(SCENARIO_NUGET_CONFIG_FILE "${CMAKE_CURRENT_LIST_DIR}/nuget.config" CACHE FILEPATH "Optional scenario-only NuGet config override")
+
 add_nuget_packages(
     PACKAGES
         Microsoft.Windows.ImplementationLibrary 1.*
         Microsoft.Windows.CppWinRT              2.0.250303.1
         Microsoft.Windows.SDK.CPP               10.0.26100.7705
     CONFIG_FILE
-        "${CMAKE_CURRENT_LIST_DIR}/nuget.config"
+        "${SCENARIO_NUGET_CONFIG_FILE}"
     LOCK_FILE
         "${CMAKE_CURRENT_LIST_DIR}/packages.lock.json"
 )
