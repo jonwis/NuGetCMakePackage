@@ -153,7 +153,8 @@ endfunction()
             The lock file should be in the source tree and checked into source control to ensure consistent package
             resolution across different machines and build configurations.
 
-        * `FRAMEWORK` is an optional argument that specifies the target framework to use.
+        * `FRAMEWORK` is an optional argument that specifies the target framework to use. It defaults to `any`
+            for `add_nuget_packages` and `native` for `add_target_nuget_packages`.
 
     After calling 'add_nuget_packages' the following GLOBAL properties will be set:
 
@@ -214,7 +215,11 @@ macro(_nuget_add_packages _NUGET_API _NUGET_SCOPED)
         cmake_parse_arguments(PARSE_ARGV 0 ADD_NUGET "${OPTIONS}" "${ONE_VALUE_KEYWORDS}" "${MULTI_VALUE_KEYWORDS}")
 
         if(NOT ADD_NUGET_FRAMEWORK)
-            set(ADD_NUGET_FRAMEWORK "any")
+            if(${_NUGET_SCOPED})
+                set(ADD_NUGET_FRAMEWORK "native")
+            else()
+                set(ADD_NUGET_FRAMEWORK "any")
+            endif()
         endif()
 
         if(NOT ADD_NUGET_CONFIG_FILE)

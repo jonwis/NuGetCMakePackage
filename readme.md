@@ -91,6 +91,18 @@ Package configs must use local imported targets and directory-scoped guards, wit
 Do not use `find_package(... GLOBAL)` or `CMAKE_FIND_PACKAGE_TARGETS_GLOBAL`.
 CMake isolation does not ensure Windows App SDK runtime coexistence.
 
+#### Target framework
+
+`add_target_nuget_packages` defaults to `FRAMEWORK native`, so packages with native dependency groups
+(such as CLI11) pass NuGet compatibility validation. NuNuGet also probes managed framework fallbacks,
+allowing managed packages in the same restore. Specify `FRAMEWORK` explicitly when a particular managed
+framework is required. The legacy `add_nuget_packages` default remains `any`.
+
+Existing scoped locks generated with the previous `any` default require `FRAMEWORK any` to remain usable
+without changes. To adopt the native default, intentionally regenerate and review those locks: their framework
+key and potentially their dependency graph change. Locked-mode mismatches remain errors; locks are not migrated
+automatically.
+
 #### Concurrent restores
 
 Concurrent restores rely on NuGet's cache locks. Use separate binary trees, share `NUGET_PACKAGES` and
