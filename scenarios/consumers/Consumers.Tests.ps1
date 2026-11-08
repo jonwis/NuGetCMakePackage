@@ -85,17 +85,29 @@ set_target_properties(@ID@ PROPERTIES
 
     function Invoke-ConsumerConfigure($BinaryDir, $LockDir, $ExtraArgs = @(), $SourceDir = $script:ScenarioDir) {
         New-Item $BinaryDir -ItemType Directory -Force | Out-Null
-        Push-Location $BinaryDir
+        $start = [Diagnostics.ProcessStartInfo]::new((Get-Command cmake).Source)
+        $start.UseShellExecute = $false
+        $start.WorkingDirectory = $BinaryDir
+        $start.RedirectStandardOutput = $true
+        $start.RedirectStandardError = $true
+        foreach ($argument in @("-S", $SourceDir, "-B", $BinaryDir, "--log-level=VERBOSE",
+            "-DCMAKE_BUILD_TYPE=Debug", "-DNUGET_TOOLS_PATH=$script:Tools",
+            "-DFIXTURE_CONFIG=$script:Config", "-DLOCK_ROOT=$LockDir") + $ExtraArgs) {
+            $start.ArgumentList.Add($argument)
+        }
+        $process = [Diagnostics.Process]::Start($start)
         try {
-            $output = & cmake -S $SourceDir -B $BinaryDir --log-level=VERBOSE "-DCMAKE_BUILD_TYPE=Debug" "-DNUGET_TOOLS_PATH=$script:Tools" "-DFIXTURE_CONFIG=$script:Config" "-DLOCK_ROOT=$LockDir" @ExtraArgs 2>&1
-            $exitCode = $LASTEXITCODE
+            $stdout = $process.StandardOutput.ReadToEndAsync()
+            $stderr = $process.StandardError.ReadToEndAsync()
+            $process.WaitForExit()
+            $output = $stdout.GetAwaiter().GetResult() + "`n" + $stderr.GetAwaiter().GetResult()
             $output | Write-Host
             [pscustomobject]@{
-                ExitCode = $exitCode
-                Output = $output -join "`n"
+                ExitCode = $process.ExitCode
+                Output = $output
             }
         } finally {
-            Pop-Location
+            $process.Dispose()
         }
     }
 
@@ -255,5 +267,178 @@ Describe "Independent consumers" {
                 $item.Process.Dispose()
             }
         }
+    }
+}
+
+Describe "Warm scoped restores" {
+    BeforeAll {
+        $script:WarmSource = Join-Path $script:ScenarioDir "warm"
+        $root = Join-Path $script:TestRoot "warm-bootstrap"
+        $locks = Join-Path $root "locks"
+        New-Item $locks -ItemType Directory -Force | Out-Null
+        $bootstrap = Invoke-ConsumerConfigure (Join-Path $root "build") $locks @() $script:WarmSource
+        if ($bootstrap.ExitCode -ne 0) { throw $bootstrap.Output }
+        $toolEntry = Select-String -LiteralPath (Join-Path $root "build/CMakeCache.txt") -Pattern '^NUNUGET_PATH:FILEPATH=(.+)$'
+        $tool = $toolEntry.Matches[0].Groups[1].Value
+        $script:InvocationLog = Join-Path $root "invocations.txt"
+        if ($IsWindows) {
+            $script:WarmWrapper = Join-Path $root "nunuget.cmd"
+            [IO.File]::WriteAllText($script:WarmWrapper, "@echo off`r`necho install>>`"$script:InvocationLog`"`r`n`"$tool`" %*`r`nexit /b %errorlevel%`r`n")
+        } else {
+            $script:WarmWrapper = Join-Path $root "nunuget.sh"
+            $logPath = $script:InvocationLog.Replace("'", "'\''")
+            $toolPath = $tool.Replace("'", "'\''")
+            [IO.File]::WriteAllText($script:WarmWrapper, "#!/bin/sh`nprintf 'install\n' >> '$logPath'`nexec '$toolPath' `"`$@`"`n")
+            chmod +x $script:WarmWrapper
+            if ($LASTEXITCODE -ne 0) { throw "Unable to make the NuNuGet wrapper executable." }
+        }
+
+        function Get-RestoreInvocationCount {
+            if (Test-Path $script:InvocationLog) { return @(Get-Content $script:InvocationLog).Count }
+            return 0
+        }
+
+        function Invoke-WarmConfigure($Run, $ExtraArgs = @()) {
+            Invoke-ConsumerConfigure $Run.Build $Run.Locks (@("-DNUNUGET_PATH:FILEPATH=$script:WarmWrapper") + $Run.Args + $ExtraArgs) $script:WarmSource
+        }
+
+        function New-WarmRestore($Name, $ConfigureArgs = @()) {
+            $root = Join-Path $script:TestRoot "warm-$Name"
+            $run = [pscustomobject]@{
+                Build = Join-Path $root "build"
+                Locks = Join-Path $root "locks"
+                Args = $ConfigureArgs
+            }
+            New-Item $run.Locks -ItemType Directory -Force | Out-Null
+            $configure = Invoke-WarmConfigure $run
+            if ($configure.ExitCode -ne 0) { throw $configure.Output }
+            $run
+        }
+    }
+
+    It "skips NuNuGet on unchanged configure and still checks consumer conflicts" {
+        $run = New-WarmRestore "unchanged"
+        $count = Get-RestoreInvocationCount
+        $configure = Invoke-WarmConfigure $run
+        $configure.ExitCode | Should -Be 0
+        (Get-RestoreInvocationCount) | Should -Be $count
+        $configure = Invoke-WarmConfigure $run @("-DSECOND_VERSION=2.0.0")
+        $configure.ExitCode | Should -Not -Be 0
+        (Get-RestoreInvocationCount) | Should -Be ($count + 1)
+        $configure.Output | Should -Match "already\s+been\s+added\s+in\s+this\s+consumer"
+    }
+
+    It "invalidates changed <ChangedInput> without changing restore semantics" -ForEach @(
+        @{ ChangedInput = "package-list" }
+        @{ ChangedInput = "config-content" }
+        @{ ChangedInput = "config-path" }
+        @{ ChangedInput = "lock-content" }
+        @{ ChangedInput = "lock-path" }
+        @{ ChangedInput = "cache-environment" }
+        @{ ChangedInput = "tool-path" }
+        @{ ChangedInput = "tool-time" }
+        @{ ChangedInput = "tool-size" }
+        @{ ChangedInput = "saved-output" }
+        @{ ChangedInput = "force-restore" }
+    ) {
+        $run = New-WarmRestore $ChangedInput
+        $count = Get-RestoreInvocationCount
+        $config = [IO.File]::ReadAllText($script:Config)
+        $packages = $env:NUGET_PACKAGES
+        $arguments = @()
+        try {
+            switch ($ChangedInput) {
+                "package-list" { $arguments = @("-DFIXTURE_VERSION=2.0.0") }
+                "config-content" { [IO.File]::AppendAllText($script:Config, "`n<!-- changed -->") }
+                "config-path" {
+                    $path = Join-Path $run.Locks "alternate.config"
+                    [IO.File]::WriteAllText($path, $config)
+                    $arguments = @("-DFIXTURE_CONFIG=$path")
+                }
+                "lock-content" { [IO.File]::AppendAllText((Join-Path $run.Locks "packages.lock.json"), "`n") }
+                "lock-path" {
+                    $path = Join-Path $run.Locks "alternate"
+                    New-Item $path -ItemType Directory -Force | Out-Null
+                    Copy-Item (Join-Path $run.Locks "packages.lock.json") $path
+                    $arguments = @("-DLOCK_ROOT=$path")
+                }
+                "cache-environment" { $env:NUGET_PACKAGES = Join-Path $run.Locks "alternate-cache" }
+                "tool-path" {
+                    $path = Join-Path $run.Locks (Split-Path $script:WarmWrapper -Leaf)
+                    Copy-Item $script:WarmWrapper $path
+                    if (-not $IsWindows) { chmod +x $path }
+                    $arguments = @("-DNUNUGET_PATH:FILEPATH=$path")
+                }
+                "tool-time" { (Get-Item $script:WarmWrapper).LastWriteTimeUtc = [DateTime]::UtcNow.AddSeconds(2) }
+                "tool-size" {
+                    $time = (Get-Item $script:WarmWrapper).LastWriteTimeUtc
+                    $comment = if ($IsWindows) { "`r`nrem changed tool`r`n" } else { "`n# changed tool`n" }
+                    [IO.File]::AppendAllText($script:WarmWrapper, $comment)
+                    (Get-Item $script:WarmWrapper).LastWriteTimeUtc = $time
+                }
+                "saved-output" { [IO.File]::AppendAllText((Join-Path $run.Build "__nuget/1/restore.output"), "`n") }
+                "force-restore" { $arguments = @("-DNUGET_FORCE_RESTORE=ON") }
+            }
+            $configure = Invoke-WarmConfigure $run $arguments
+            (Get-RestoreInvocationCount) | Should -Be ($count + 1)
+            if ($ChangedInput -eq "package-list") {
+                $configure.ExitCode | Should -Not -Be 0
+                $configure.Output | Should -Match "specified\s+NuGet\s+packages\s+differ\s+from\s+the\s+lock\s+file"
+                Join-Path $run.Build "__nuget/1/restore.fingerprint" | Should -Not -Exist
+                $configure = Invoke-WarmConfigure $run @("-DFIXTURE_VERSION=1.0.0")
+                $configure.ExitCode | Should -Be 0
+                (Get-RestoreInvocationCount) | Should -Be ($count + 2)
+            } else {
+                $configure.ExitCode | Should -Be 0
+            }
+        } finally {
+            [IO.File]::WriteAllText($script:Config, $config)
+            $env:NUGET_PACKAGES = $packages
+        }
+    }
+
+    It "invalidates environment substitutions in the NuGet config" {
+        $config = [IO.File]::ReadAllText($script:Config)
+        $savedFeed = $env:NUGET_CMAKE_TEST_FEED
+        try {
+            $env:NUGET_CMAKE_TEST_FEED = $script:Feed
+            [IO.File]::WriteAllText($script:Config, $config.Replace([Security.SecurityElement]::Escape($script:Feed), "%NUGET_CMAKE_TEST_FEED%"))
+            $run = New-WarmRestore "config-environment"
+            $count = Get-RestoreInvocationCount
+            $env:NUGET_CMAKE_TEST_FEED = "$script:Feed/."
+            $configure = Invoke-WarmConfigure $run
+            $configure.ExitCode | Should -Be 0
+            (Get-RestoreInvocationCount) | Should -Be ($count + 1)
+        } finally {
+            [IO.File]::WriteAllText($script:Config, $config)
+            $env:NUGET_CMAKE_TEST_FEED = $savedFeed
+        }
+    }
+
+    It "requires the transitive package's <Marker> completion file" -ForEach @(
+        @{ Marker = ".nupkg.metadata" }
+        @{ Marker = "fixture.dependency.1.0.0.nupkg.sha512" }
+    ) {
+        $run = New-WarmRestore $Marker
+        $count = Get-RestoreInvocationCount
+        $path = Join-Path $env:NUGET_PACKAGES "fixture.dependency/1.0.0/$Marker"
+        $bytes = [IO.File]::ReadAllBytes($path)
+        try {
+            Remove-Item $path
+            $configure = Invoke-WarmConfigure $run
+            $configure.ExitCode | Should -Be 0
+            (Get-RestoreInvocationCount) | Should -Be ($count + 1)
+        } finally {
+            [IO.File]::WriteAllBytes($path, $bytes)
+        }
+    }
+
+    It "continues invoking NuNuGet for the legacy API" {
+        $run = New-WarmRestore "legacy" @("-DTEST_LEGACY=ON")
+        $count = Get-RestoreInvocationCount
+        $configure = Invoke-WarmConfigure $run
+        $configure.ExitCode | Should -Be 0
+        (Get-RestoreInvocationCount) | Should -Be ($count + 1)
+        Join-Path $run.Build "__nuget" | Should -Not -Exist
     }
 }

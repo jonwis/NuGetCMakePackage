@@ -81,6 +81,9 @@ target_link_libraries(ClientA PRIVATE Microsoft.Windows.ImplementationLibrary)
 
 `ClientB` can request another version. Set `NUGET_PACKAGES` to share NuGet's cache, for example `Q:\nuget-cache`.
 
+Scoped restores reuse completed local packages when inputs are unchanged; set `NUGET_FORCE_RESTORE=ON`
+to rerun NuNuGet for refresh or security audits.
+
 Conflicting same-directory or ancestor versions fail. Do not register the same package through both APIs,
 even at equal versions.
 

@@ -200,6 +200,68 @@ function(add_target_nuget_packages)
     _nuget_add_packages(add_target_nuget_packages TRUE)
 endfunction()
 
+function(_nuget_restore_fingerprint OUTPUT LIST_FILE CONFIG_FILE LOCK_FILE TOOL)
+    set(FINGERPRINT "scoped-restore-v1")
+    foreach(INPUT IN ITEMS "${LIST_FILE}" "${CONFIG_FILE}" "${LOCK_FILE}")
+        set(CONTENT_HASH "missing")
+        if(EXISTS "${INPUT}" AND NOT IS_DIRECTORY "${INPUT}")
+            file(SHA256 "${INPUT}" CONTENT_HASH)
+        endif()
+        string(SHA256 FINGERPRINT "${FINGERPRINT}|${INPUT}|${CONTENT_HASH}")
+    endforeach()
+    set(TOOL_TIME "missing")
+    set(TOOL_SIZE "missing")
+    if(EXISTS "${TOOL}" AND NOT IS_DIRECTORY "${TOOL}")
+        file(TIMESTAMP "${TOOL}" TOOL_TIME "%Y-%m-%dT%H:%M:%S.%f" UTC)
+        file(SIZE "${TOOL}" TOOL_SIZE)
+    endif()
+    string(SHA256 FINGERPRINT "${FINGERPRINT}|${TOOL}|${TOOL_TIME}|${TOOL_SIZE}")
+    set(ENVIRONMENT_NAMES NUGET_PACKAGES HOME USERPROFILE)
+    if(EXISTS "${CONFIG_FILE}" AND NOT IS_DIRECTORY "${CONFIG_FILE}")
+        file(READ "${CONFIG_FILE}" CONFIG_CONTENT)
+        string(REGEX MATCHALL "%[A-Za-z_][A-Za-z0-9_]*%" CONFIG_ENVIRONMENT "${CONFIG_CONTENT}")
+        foreach(REFERENCE IN LISTS CONFIG_ENVIRONMENT)
+            string(REPLACE "%" "" NAME "${REFERENCE}")
+            list(APPEND ENVIRONMENT_NAMES "${NAME}")
+        endforeach()
+    endif()
+    foreach(NAME IN LISTS ENVIRONMENT_NAMES)
+        if(DEFINED ENV{${NAME}})
+            string(SHA256 FINGERPRINT "${FINGERPRINT}|${NAME}=set:$ENV{${NAME}}")
+        else()
+            string(SHA256 FINGERPRINT "${FINGERPRINT}|${NAME}=unset")
+        endif()
+    endforeach()
+    set(${OUTPUT} "${FINGERPRINT}" PARENT_SCOPE)
+endfunction()
+
+function(_nuget_restore_complete OUTPUT RESULT)
+    set(${RESULT} FALSE PARENT_SCOPE)
+    set(PACKAGES_PATH)
+    set(PACKAGE_COUNT 0)
+    string(REGEX REPLACE "\r?\n\r?" ";" LINES "${OUTPUT}")
+    foreach(LINE IN LISTS LINES)
+        if(NOT PACKAGES_PATH)
+            if(LINE MATCHES "GlobalPackagesPath: (.+)")
+                set(PACKAGES_PATH "${CMAKE_MATCH_1}")
+            endif()
+        elseif(LINE MATCHES "Package: ([^\\]*)/(.*)")
+            string(TOLOWER "${CMAKE_MATCH_1}" ID)
+            string(TOLOWER "${CMAKE_MATCH_2}" VERSION)
+            set(LOCATION "${PACKAGES_PATH}/${ID}/${VERSION}")
+            foreach(MARKER IN ITEMS "${LOCATION}/.nupkg.metadata" "${LOCATION}/${ID}.${VERSION}.nupkg.sha512")
+                if(NOT EXISTS "${MARKER}" OR IS_DIRECTORY "${MARKER}")
+                    return()
+                endif()
+            endforeach()
+            math(EXPR PACKAGE_COUNT "${PACKAGE_COUNT} + 1")
+        endif()
+    endforeach()
+    if(PACKAGE_COUNT GREATER 0)
+        set(${RESULT} TRUE PARENT_SCOPE)
+    endif()
+endfunction()
+
 # A macro preserves the public function's PARSE_ARGV and discovery PARENT_SCOPE.
 macro(_nuget_add_packages _NUGET_API _NUGET_SCOPED)
     block(SCOPE_FOR POLICIES)
@@ -286,24 +348,57 @@ macro(_nuget_add_packages _NUGET_API _NUGET_SCOPED)
 
         # Make sure that 'nunuget' is available, then invoke it to install the packages to the global packages path.
         ensure_nunuget()
-        message(VERBOSE "Invoking NuNuGet with the following arguments: --configFile ${ADD_NUGET_CONFIG_FILE} --listFile ${PACKAGE_LIST_FILE} --lockFile ${ADD_NUGET_LOCK_FILE}")
-        execute_process(
-            COMMAND "${NUNUGET_PATH}" install
-                --configFile "${ADD_NUGET_CONFIG_FILE}"
-                --listFile "${PACKAGE_LIST_FILE}"
-                --lockFile "${ADD_NUGET_LOCK_FILE}"
-                --verbose
-            ${RESTORE_WORKING_DIRECTORY}
-            RESULT_VARIABLE NUNUGET_RESULT
-            OUTPUT_VARIABLE NUNUGET_OUTPUT
-            ERROR_VARIABLE NUNUGET_ERROR
-        )
+        set(RESTORE_REUSABLE FALSE)
+        if(${_NUGET_SCOPED})
+            set(RESTORE_OUTPUT_FILE "${RESTORE_DIRECTORY}/restore.output")
+            set(RESTORE_FINGERPRINT_FILE "${RESTORE_DIRECTORY}/restore.fingerprint")
+            _nuget_restore_fingerprint(RESTORE_FINGERPRINT "${PACKAGE_LIST_FILE}" "${ADD_NUGET_CONFIG_FILE}" "${ADD_NUGET_LOCK_FILE}" "${NUNUGET_PATH}")
+            if(NOT NUGET_FORCE_RESTORE AND EXISTS "${NUNUGET_PATH}" AND NOT IS_DIRECTORY "${NUNUGET_PATH}"
+                AND EXISTS "${RESTORE_FINGERPRINT_FILE}" AND EXISTS "${RESTORE_OUTPUT_FILE}")
+                file(READ "${RESTORE_FINGERPRINT_FILE}" SAVED_FINGERPRINT)
+                file(SHA256 "${RESTORE_OUTPUT_FILE}" OUTPUT_HASH)
+                if(SAVED_FINGERPRINT STREQUAL "${RESTORE_FINGERPRINT};${OUTPUT_HASH}")
+                    file(READ "${RESTORE_OUTPUT_FILE}" NUNUGET_OUTPUT)
+                    _nuget_restore_complete("${NUNUGET_OUTPUT}" RESTORE_REUSABLE)
+                endif()
+            endif()
+        endif()
+        if(RESTORE_REUSABLE)
+            message(VERBOSE "Reusing completed NuGet restore: ${PACKAGE_LIST_FILE}")
+            set(NUNUGET_RESULT 0)
+        else()
+            if(${_NUGET_SCOPED})
+                file(REMOVE "${RESTORE_FINGERPRINT_FILE}")
+            endif()
+            message(VERBOSE "Invoking NuNuGet with the following arguments: --configFile ${ADD_NUGET_CONFIG_FILE} --listFile ${PACKAGE_LIST_FILE} --lockFile ${ADD_NUGET_LOCK_FILE}")
+            execute_process(
+                COMMAND "${NUNUGET_PATH}" install
+                    --configFile "${ADD_NUGET_CONFIG_FILE}"
+                    --listFile "${PACKAGE_LIST_FILE}"
+                    --lockFile "${ADD_NUGET_LOCK_FILE}"
+                    --verbose
+                ${RESTORE_WORKING_DIRECTORY}
+                RESULT_VARIABLE NUNUGET_RESULT
+                OUTPUT_VARIABLE NUNUGET_OUTPUT
+                ERROR_VARIABLE NUNUGET_ERROR
+            )
+        endif()
 
         if(NUNUGET_RESULT)
             if(NUNUGET_RESULT EQUAL 100)
                 message(FATAL_ERROR "${_NUGET_API}: The specified NuGet packages differ from the lock file: ${ADD_NUGET_LOCK_FILE}.\nPlease delete the lock file and re-run configuration to regenerate the lock file with the updated packages.")
             endif()
             message(FATAL_ERROR "${_NUGET_API}: NuNuGet failed with exit code ${NUNUGET_RESULT}. Output: ${NUNUGET_OUTPUT}\nError: ${NUNUGET_ERROR}")
+        endif()
+
+        if(${_NUGET_SCOPED} AND NOT RESTORE_REUSABLE)
+            _nuget_restore_complete("${NUNUGET_OUTPUT}" RESTORE_COMPLETE)
+            if(RESTORE_COMPLETE)
+                file(WRITE "${RESTORE_OUTPUT_FILE}" "${NUNUGET_OUTPUT}")
+                file(SHA256 "${RESTORE_OUTPUT_FILE}" OUTPUT_HASH)
+                _nuget_restore_fingerprint(RESTORE_FINGERPRINT "${PACKAGE_LIST_FILE}" "${ADD_NUGET_CONFIG_FILE}" "${ADD_NUGET_LOCK_FILE}" "${NUNUGET_PATH}")
+                file(WRITE "${RESTORE_FINGERPRINT_FILE}" "${RESTORE_FINGERPRINT};${OUTPUT_HASH}")
+            endif()
         endif()
 
         # Convert the output from NuNuGet into a list of lines to parse the resolved packages and their paths.
