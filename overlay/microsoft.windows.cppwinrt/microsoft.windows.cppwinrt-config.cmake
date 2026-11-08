@@ -143,13 +143,13 @@ function(add_cppwinrt_projection TARGET_NAME)
 
     list(APPEND CPPWINRT_COMMAND > ${CPPWINRT_OUTPUT_FILE})
 
-    # Check 'CPPWINRT_INPUTS', if the items are none of:
+    # Check input and reference metadata, if the items are none of:
     #   * local
     #   * sdk[+]
     #   * 10.0.12345.0[+]
     # add it as a dependency. If the item is a folder, add the recursively glob'd '*.winmd' files as dependencies.
     set(CPPWINRT_DEPENDS)
-    foreach(CPPWINRT_INPUT IN LISTS CPPWINRT_INPUTS)
+    foreach(CPPWINRT_INPUT IN LISTS CPPWINRT_INPUTS CPPWINRT_REFS)
         if((CPPWINRT_INPUT STREQUAL "local") OR
             (CPPWINRT_INPUT MATCHES [[^sdk\+?$]]) OR
             (CPPWINRT_INPUT MATCHES [[^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\+?$]]))
@@ -171,7 +171,7 @@ function(add_cppwinrt_projection TARGET_NAME)
     add_custom_command(
         OUTPUT ${CPPWINRT_OUTPUT_FILE}
         COMMAND ${CPPWINRT_COMMAND}
-        DEPENDS ${CPPWINRT_DEPENDS}
+        DEPENDS ${CPPWINRT_DEPENDS} "${CPPWINRT_EXECUTABLE_PATH}"
         COMMENT "Generating C++/WinRT Projection - ${TARGET_NAME}"
         WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
     )
