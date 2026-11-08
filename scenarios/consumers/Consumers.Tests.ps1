@@ -424,7 +424,7 @@ Describe "Warm scoped restores" {
         $path = Join-Path $env:NUGET_PACKAGES "fixture.dependency/1.0.0/$Marker"
         $bytes = [IO.File]::ReadAllBytes($path)
         try {
-            Remove-Item $path
+            Remove-Item $path -Force
             $configure = Invoke-WarmConfigure $run
             $configure.ExitCode | Should -Be 0
             (Get-RestoreInvocationCount) | Should -Be ($count + 1)
